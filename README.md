@@ -15,5 +15,5 @@ lxml==4.9.3
 Создайте нового бота командой /newbot
 Получите токен и замените YOUR_BOT_TOKEN в коде
 
-4. Запуск бота: python itmo_telegram_bot.py
+4. Запуск бота: python deepseek_python_20250824_2af024.py
    
