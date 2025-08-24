@@ -1,0 +1,183 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from dataclasses import dataclass
+from typing import List, Optional
+import logging
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@dataclass
+class Subject:
+    name: str
+    semester: Optional[str] = None
+    credits: Optional[str] = None
+    hours: Optional[str] = None
+    type: Optional[str] = None  # лекции, практики, etc.
+
+@dataclass
+class Program:
+    name: str
+    code: str
+    url: str
+    duration: str
+    description: str
+    subjects: List[Subject]
+    competencies: List[str]
+
+class AdvancedITMOParser:
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+    
+    def parse_program_details(self, url: str) -> Optional[Program]:
+        """Расширенный парсинг деталей программы"""
+        try:
+            response = self.session.get(url)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            program = Program(
+                name=self._get_program_name(soup),
+                code=self._get_program_code(soup),
+                url=url,
+                duration=self._get_duration(soup),
+                description=self._get_description(soup),
+                subjects=self._get_subjects(soup),
+                competencies=self._get_competencies(soup)
+            )
+            
+            return program
+            
+        except Exception as e:
+            logger.error(f"Error parsing {url}: {e}")
+            return None
+    
+    def _get_program_name(self, soup: BeautifulSoup) -> str:
+        # Более точное извлечение названия
+        selectors = [
+            'h1.program-title',
+            'h1.title',
+            'h1',
+            '.program-header h1'
+        ]
+        
+        for selector in selectors:
+            element = soup.select_one(selector)
+            if element:
+                return element.get_text().strip()
+        
+        return "Unknown Program"
+    
+    def _get_program_code(self, soup: BeautifulSoup) -> str:
+        # Поиск кода программы в различных форматах
+        code_patterns = [
+            r'\d{2}\.\d{2}\.\d{2}',
+            r'[A-Z]{2,4}\.\d{2,4}',
+            r'Программа:\s*([A-Z0-9\.]+)'
+        ]
+        
+        text = soup.get_text()
+        for pattern in code_patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group()
+        
+        return "N/A"
+    
+    def _get_subjects(self, soup: BeautifulSoup) -> List[Subject]:
+        subjects = []
+        
+        # Поиск различных форматов таблиц с дисциплинами
+        table_selectors = [
+            'table.curriculum',
+            'table.subjects',
+            'table.disciplines',
+            'table'
+        ]
+        
+        for selector in table_selectors:
+            tables = soup.select(selector)
+            for table in tables:
+                subjects.extend(self._parse_subject_table(table))
+        
+        return subjects
+    
+    def _parse_subject_table(self, table: BeautifulSoup) -> List[Subject]:
+        subjects = []
+        rows = table.find_all('tr')
+        
+        if not rows:
+            return subjects
+        
+        # Определяем структуру таблицы
+        headers = [th.get_text().strip().lower() for th in rows[0].find_all('th')]
+        
+        for row in rows[1:]:
+            cells = row.find_all('td')
+            if cells:
+                subject_data = {}
+                
+                for i, cell in enumerate(cells):
+                    if i < len(headers):
+                        subject_data[headers[i]] = cell.get_text().strip()
+                
+                # Создаем объект Subject
+                subject = Subject(
+                    name=subject_data.get('название', subject_data.get('дисциплина', '')),
+                    semester=subject_data.get('семестр', ''),
+                    credits=subject_data.get('зачетные единицы', subject_data.get('кредиты', '')),
+                    hours=subject_data.get('часы', ''),
+                    type=subject_data.get('тип', '')
+                )
+                
+                subjects.append(subject)
+        
+        return subjects
+
+# Пример использования
+if __name__ == "__main__":
+    parser = AdvancedITMOParser()
+    
+    programs_urls = [
+        "https://abit.itmo.ru/program/master/ai",
+        "https://abit.itmo.ru/program/master/ai_product"
+    ]
+    
+    all_programs = []
+    
+    for url in programs_urls:
+        logger.info(f"Parsing {url}")
+        program = parser.parse_program_details(url)
+        if program:
+            all_programs.append(program)
+            logger.info(f"Parsed: {program.name}")
+    
+    # Сохранение в различные форматы
+    if all_programs:
+        # Сохранение в JSON
+        import json
+        with open('itmo_programs_detailed.json', 'w', encoding='utf-8') as f:
+            json.dump([program.__dict__ for program in all_programs], f, ensure_ascii=False, indent=2)
+        
+        # Сохранение в CSV
+        df_data = []
+        for program in all_programs:
+            for subject in program.subjects:
+                df_data.append({
+                    'program': program.name,
+                    'program_code': program.code,
+                    'subject': subject.name,
+                    'semester': subject.semester,
+                    'credits': subject.credits,
+                    'hours': subject.hours,
+                    'type': subject.type
+                })
+        
+        df = pd.DataFrame(df_data)
+        df.to_csv('itmo_curriculum.csv', index=False, encoding='utf-8')
+        
+        logger.info("Data saved successfully!")
